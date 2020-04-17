@@ -1,0 +1,19 @@
+syntax = "proto3";
+package protobuf;
+
+service AuthService {
+  rpc Login (User) returns (Token);
+  rpc Register (User) returns (Token);
+  rpc Revoke (Token) returns (Token);
+  rpc Renew (Token) returns (Token);
+}
+
+message User {
+  string ID = 1;
+  string Password =2;
+}
+
+message Token {
+  string SignedString = 1;
+}
+
