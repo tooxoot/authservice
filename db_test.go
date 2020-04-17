@@ -7,60 +7,61 @@ import (
 	"testing"
 
 	"cloud.google.com/go/datastore"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestNewUserData(T *testing.T) {
-	generateFromPassword = func (_ []byte, _ int) ([]byte, error) { return []byte("generatedHash"), nil }
-	
-	newUserData := NewUserData("SomeID", "SomePW")
-	if newUserData.ID != "SomeID" || newUserData.Hash != "generatedHash" {
-		T.Errorf("NewUserData failed! Valid ID and Hash expected. Expexted 'SomeID', 'generatedHash' got '%v', '%v'", newUserData.ID, newUserData.Hash)
-	}
+	expectations := map[string]bool{}
 
-	generateFromPassword = func (b []byte, c int) ([]byte, error) { return []byte{}, errors.New("") }
-	newUserData = NewUserData("SomeID", "SomePW")
-
-	if newUserData != nil {
-		T.Errorf("NewUserData failed! Expected nil on hashing error. Got '%+v'", newUserData)
+	generateFromPassword = func (b []byte, c int) ([]byte, error) { 
+		expectations["Call generateFromPassword"] = true
+		expectations["Pass password to generateFromPassword"] = string(b) == "SomePW"
+		expectations["Pass MinCost"] = c == bcrypt.MinCost
+		return []byte("generatedHash"), nil 
 	}
+	userData := NewUserData("SomeID", "SomePW")
+	expectations["Return correct Userdata"] = fmt.Sprintf("%+v", userData) == "&{ID:SomeID Hash:generatedHash Token: key:<nil>}"
+
+	generateFromPassword = func (b []byte, c int) ([]byte, error) { 
+		return nil, errors.New("") 
+	}	
+	expectations["Return nil on hashing error"] = NewUserData("SomeID", "SomePW") == nil
+
+	CheckExpectations(expectations, T)
 }
 
 func TestCompare(T *testing.T) {
-	userData := &UserData{}
+	expectations := map[string]bool{}
+	usedPW := "SomePW"
 
-	compareHashAndPassword = func(_ []byte, _ []byte) error { return nil }
+	var userData *UserData
+	expectations["Return false on nil UserData"] = userData.compare(usedPW)
 
-	if !userData.compare("SomePW") {
-		T.Errorf("UserData.compare failed! Expected true on nil error")
+	userData = &UserData{"ID1", "Hash1", "Token1", nil}
+
+
+	compareHashAndPassword = func(b1 []byte, b2 []byte) error { 
+		expectations["Call compareHashAndPassword"] = true
+		expectations["Pass Hash"] = string(b1) == userData.Hash
+		expectations["Pass Password"] = string(b1) == usedPW
+		return nil 
 	}
+	expectations["Return true on nil error"] = userData.compare(usedPW)
 	
-	compareHashAndPassword = func(_ []byte, _ []byte) error { return errors.New("") }
-
-	if userData.compare("SomePW") {
-		T.Errorf("UserData.compare failed! Expected false on error")
+	compareHashAndPassword = func(_ []byte, _ []byte) error { 
+		return errors.New("") 
 	}
-
-	userData = nil
-
-	if userData.compare("SomePW") {
-		T.Errorf("UserData.compare failed! Expected false on nil pointer")
-	}
+	expectations["Return false on error"] = userData.compare(usedPW)
 }
 
-func CheckExpectations(expectations map[string]bool, T *testing.T) {
-	for msg, ok := range expectations {
-		if !ok {
-			T.Errorf("Expectation `%v` not met!", msg)
-		}
-	}
-}
+
 
 func TestWriteToDB(T *testing.T) {
 	T.Run("Nil UserData", func(t *testing.T){
 		expectations := map[string]bool{}
 		var userData *UserData
 		
-		expectations["Nil error on nil UserData"] = userData.writeToDB() == nil
+		expectations["Nil error on nil UserData"] = writeToDB(userData) == nil
 	
 		CheckExpectations(expectations, t)
 	})
@@ -82,7 +83,7 @@ func TestWriteToDB(T *testing.T) {
 			return usedKey2, nil
 		}
 		
-		expectations["Nil error on valid UserData"] = userData.writeToDB() == nil 
+		expectations["Nil error on valid UserData"] = writeToDB(userData) == nil 
 		expectations["Set UserData key to key from put"] = userData.key == usedKey2 
 		
 		CheckExpectations(expectations, T)
@@ -106,7 +107,7 @@ func TestWriteToDB(T *testing.T) {
 			return usedKey2, nil
 		}
 		
-		expectations["Nil error on valid UserData"] = userData.writeToDB() == nil 
+		expectations["Nil error on valid UserData"] = writeToDB(userData) == nil 
 		expectations["Set UserData key to key from put"] = userData.key == usedKey2 
 		
 		CheckExpectations(expectations, T)
@@ -127,52 +128,49 @@ func TestWriteToDB(T *testing.T) {
 			return &datastore.Key{}, thrownError
 		}
 		
-		expectations["Return error from put"] = userData.writeToDB() == thrownError 
+		expectations["Return error from put"] = writeToDB(userData) == thrownError 
 		expectations["Nil key on UserData"] = userData.key == nil 
 		
 		CheckExpectations(expectations, T)
 	})
 }
 
-func TestReadFromDB(T *testing.T) {
-	T.Run("Nil UserData", func(t *testing.T){
+func TestReadUserData(T *testing.T) {
+	T.Run("Nil Query", func(t *testing.T){
 		expectations := map[string]bool{}
-		var userData *UserData
 		
-		expectations["Nil error on nil UserData"] = userData.readFromDB() == nil
+		result, err := readUserData(nil)
+
+		expectations["Nil result on nil Query"] =  result == nil
+		expectations["Error on nil Query"] =  err.Error() == "nil query" 
 	
 		CheckExpectations(expectations, t)
 	})
 
 	T.Run("Valid UserData", func(t *testing.T){
 		expectations := map[string]bool{}
-		userDataFromRead := &UserData{"ID1", "Hash1", nil}
-		userData := &UserData{"ID2", "Hash2", nil}
-		
-		newQuery = func(kind string) *datastore.Query {
-			expectations["Call newQuery"] = true
-			return datastore.NewQuery(kind)
-		}
+		userDataFromRead := &UserData{"ID1", "Hash1", "Token1", nil}
+		query := &datastore.Query{}
 	
 		getAll = func(ctx context.Context, q *datastore.Query, dst interface{}) ([]*datastore.Key, error) {
 			expectations["Call getAll"] = true
-			expectedQuery := fmt.Sprint(datastore.NewQuery("USER").Filter("ID =", "ID2").Limit(1))
-			expectations["Use query with UserDataId and limit of 1"] = fmt.Sprint(q) == fmt.Sprint(expectedQuery)
+			expectations["Use query with UserDataId and limit of 1"] = q == query
 			slice, ok := dst.(*[]*UserData)
 			expectations["Use type *[]*UserData in getAll dst"] = ok
 			*slice = append(*slice, userDataFromRead)
 			return nil, nil	
 		}
+
+		result, err := readUserData(query)
 	
-		expectations["Nil Error on valid UserData"] = userData.readFromDB() == nil 
-		expectations["Set UserData on DB read"] = fmt.Sprint(userData) == fmt.Sprint(userDataFromRead)
+		expectations["Return UserData from getAll"] = result == userDataFromRead
+		expectations["Nil Error on valid UserData"] = err == nil 
 	
 		CheckExpectations(expectations, T)
 	})
 
 	T.Run("Error on getAll", func(t *testing.T){
 		expectations := map[string]bool{}
-		userData := &UserData{"ID2", "Hash2", nil}
 		thrownError := errors.New("")
 		
 		newQuery = func(kind string) *datastore.Query {
@@ -185,15 +183,16 @@ func TestReadFromDB(T *testing.T) {
 			return nil, thrownError	
 		}
 	
-		expectations["Return error from getAll"] = userData.readFromDB() == thrownError 
-		expectations["Do not set UserData on Error"] = fmt.Sprint(userData) != "&{ ID1 Hash2 <nil>}"
+		result, err := readUserData(&datastore.Query{})
+
+		expectations["Do not return UserData"] = result == nil
+		expectations["Return error from getAll"] = err == thrownError 
 	
 		CheckExpectations(expectations, T)
 	})
 
 	T.Run("No results", func(t *testing.T){
 		expectations := map[string]bool{}
-		userData := &UserData{"ID1", "Hash2", nil}
 		
 		newQuery = func(kind string) *datastore.Query {
 			expectations["Call newQuery"] = true
@@ -205,16 +204,17 @@ func TestReadFromDB(T *testing.T) {
 			return nil, nil	
 		}
 	
-		expectations["Return error on empty result list"] = userData.readFromDB().Error() == "No Results for ID 'ID1'" 
-		expectations["Do not set UserData on Error"] = fmt.Sprint(userData) != "&{ ID1 Hash2 <nil>}"
+		result, err := readUserData(&datastore.Query{})
+
+		expectations["Do not return UserData"] = result == nil
+		expectations["Return error on empty result list"] = err.Error() == fmt.Sprintf("No Results for Query '%v'", &datastore.Query{})
 	
 		CheckExpectations(expectations, T)
 	})
 
 	T.Run("Too many results", func(t *testing.T){
 		expectations := map[string]bool{}
-		userDataFromRead := &UserData{"ID1", "Hash1", nil}
-		userData := &UserData{"ID1", "Hash2", nil}
+		userDataFromRead := &UserData{"ID1", "Hash1", "Token1", nil}
 		
 		newQuery = func(kind string) *datastore.Query {
 			expectations["Call newQuery"] = true
@@ -229,9 +229,70 @@ func TestReadFromDB(T *testing.T) {
 			return nil, nil	
 		}
 	
-		expectations["Return error on empty result list"] = userData.readFromDB().Error() == "Got 2 results for ID 'ID1'" 
-		expectations["Do not set UserData on Error"] = fmt.Sprint(userData) != "&{ ID1 Hash2 <nil>}"
+		result, err := readUserData(&datastore.Query{})
+	
+		expectations["Do not return UserData"] = result == nil
+		expectations["Return error on empty result list"] = err.Error() == fmt.Sprintf("Got 2 results for Query '%v'", &datastore.Query{})
 	
 		CheckExpectations(expectations, T)
+	})
+}
+
+func TestReadTokenByID(T *testing.T) {
+	T.Run("Empty String", func(t *testing.T){
+		expectations := map[string]bool{}
+		
+		result, err := readTokenByID("")
+
+		expectations["Return nil result"] =  result == nil
+		expectations["Return error"] =  err.Error() == "empty id" 
+	
+		CheckExpectations(expectations, t)
+	})
+
+	T.Run("Valid id", func(t *testing.T){
+		expectations := map[string]bool{}
+		userDataFromRead := &UserData{"ID1", "Hash1", "Token1", nil}
+		
+
+		getAll = func(ctx context.Context, q *datastore.Query, dst interface{}) ([]*datastore.Key, error) {
+			expectations["Call getAll"] = true
+			expectedQuery := newQuery("USER").Filter("ID =", "ID1").Project("ID", "Token")
+			expectations["Use projected id query"] = fmt.Sprint(q) == fmt.Sprint(expectedQuery)
+			slice, _ := dst.(*[]*UserData)
+			*slice = append(*slice, userDataFromRead)
+			return nil, nil	
+		}
+		
+		result, err := readTokenByID("ID1")
+
+		expectations["Return read UserData"] = fmt.Sprint(result) == fmt.Sprint(userDataFromRead)
+		expectations["Return nil error"] =  err == nil
+	
+		CheckExpectations(expectations, t)
+	})
+}
+
+func TestReadComplete(T *testing.T) {
+	T.Run("Valid id", func(t *testing.T){
+		expectations := map[string]bool{}
+		userDataFromRead := &UserData{"ID1", "Hash1", "Token1", nil}
+		
+
+		getAll = func(ctx context.Context, q *datastore.Query, dst interface{}) ([]*datastore.Key, error) {
+			expectations["Call getAll"] = true
+			expectedQuery := newQuery("USER").Filter("ID =", "ID1")
+			expectations["Use projected id query"] = fmt.Sprint(q) == fmt.Sprint(expectedQuery)
+			slice, _ := dst.(*[]*UserData)
+			*slice = append(*slice, userDataFromRead)
+			return nil, nil	
+		}
+		
+		result, err := readComplete("ID1")
+
+		expectations["Return read UserData"] = fmt.Sprint(result) == fmt.Sprint(userDataFromRead)
+		expectations["Return nil error"] =  err == nil
+	
+		CheckExpectations(expectations, t)
 	})
 }

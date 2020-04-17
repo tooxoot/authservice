@@ -2,16 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"cloud.google.com/go/datastore"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// UserData contains the the user's persisted data
+// UserData contains the user's persisted data
 type UserData struct {
 	ID string
 	Hash string
+	Token string
 	key *datastore.Key `datastore:"__key__"`
 }
 
@@ -44,7 +46,7 @@ func (ud *UserData) compare(pw string) bool {
 	return nil == compareHashAndPassword([]byte(ud.Hash), []byte(pw))
 }
 
-func (ud *UserData) writeToDB() error {
+func writeToDB(ud *UserData) error {
 	if ud == nil {
 		return nil
 	}
@@ -65,28 +67,45 @@ func (ud *UserData) writeToDB() error {
 	return nil
 }
 
-func (ud *UserData) readFromDB() error {
-	if ud == nil {
-		return nil
+func readUserData(query *datastore.Query) (*UserData, error) {
+	if query == nil {
+		return nil, errors.New("nil query")
 	}
 
-	q := newQuery("USER").Filter("ID =", ud.ID).Limit(1)
 	dst  := []*UserData{}
-	_, err := getAll(context.TODO(), q, &dst)
+	_, err := getAll(context.TODO(), query, &dst)
 	
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if (len(dst) == 0) {
-		return fmt.Errorf("No Results for ID '%v'", ud.ID)
+		return nil, fmt.Errorf("No Results for Query '%v'", query)
 	}
 
 	if (len(dst) != 1) {
-		return fmt.Errorf("Got %v results for ID '%v'", len(dst), ud.ID)
+		return nil, fmt.Errorf("Got %v results for Query '%v'", len(dst), query)
 	}
 
-	*ud = *dst[0]
+	return dst[0], nil
+}
 
-	return nil
+func readTokenByID(id string) (*UserData, error) {
+	if id == "" {
+		return nil, errors.New("empty id")
+	}
+
+	q := newQuery("USER").Filter("ID =", id).Project("ID", "Token")
+
+	return readUserData(q)
+}
+
+func readComplete(id string) (*UserData, error) {
+	if id == "" {
+		return nil, errors.New("empty id")
+	}
+
+	q := newQuery("USER").Filter("ID =", id)
+
+	return readUserData(q)
 }
