@@ -17,6 +17,10 @@ type UserData struct {
 
 var generateFromPassword = bcrypt.GenerateFromPassword
 var compareHashAndPassword = bcrypt.CompareHashAndPassword
+var incompleteKey = datastore.IncompleteKey
+var put func(ctx context.Context, key *datastore.Key, src interface{}) (*datastore.Key, error)
+var getAll func(ctx context.Context, q *datastore.Query, dst interface{}) (keys []*datastore.Key, err error)
+var newQuery = datastore.NewQuery
 
 // NewUserData created a new UserData object
 func NewUserData(id, pw string) *UserData {
@@ -39,11 +43,6 @@ func (ud *UserData) compare(pw string) bool {
 
 	return nil == compareHashAndPassword([]byte(ud.Hash), []byte(pw))
 }
-
-var incompleteKey = datastore.IncompleteKey
-var put func(ctx context.Context, key *datastore.Key, src interface{}) (*datastore.Key, error)
-var getAll func(ctx context.Context, q *datastore.Query, dst interface{}) (keys []*datastore.Key, err error)
-var newQuery = datastore.NewQuery
 
 func (ud *UserData) writeToDB() error {
 	if ud == nil {
